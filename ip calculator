@@ -1,0 +1,478 @@
+#include <iostream>
+#include <vector>
+#include <string>
+#include <sstream>
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <cctype>
+#include <map>
+#include <limits>
+#include <stdexcept> // Добавляем для исключений
+#include <cstdint>   // Для uint32_t
+
+using namespace std;
+
+class IPv4Address {
+private:
+    uint32_t address;
+
+public:
+    IPv4Address() : address(0) {}
+    IPv4Address(uint32_t addr) : address(addr) {}
+    
+    // Constructor from string - parses IPv4 address
+    IPv4Address(const string& ipStr) {
+        address = 0;
+        istringstream iss(ipStr);
+        string segment;
+        int shift = 24;
+        int octetCount = 0;
+        
+        while (getline(iss, segment, '.')) {
+            // Check for empty octets
+            if (segment.empty()) {
+                throw invalid_argument("Empty octet in IP address");
+            }
+            
+            // Check for non-digit characters
+            for (char c : segment) {
+                if (!isdigit(c)) {
+                    throw invalid_argument("Non-digit character in IP address");
+                }
+            }
+            
+            try {
+                int octet = stoi(segment);
+                if (octet < 0 || octet > 255) {
+                    throw invalid_argument("IP octet out of range (0-255)");
+                }
+                address |= (octet << shift);
+                shift -= 8;
+                octetCount++;
+            } catch (const exception&) {
+                throw invalid_argument("Invalid octet format");
+            }
+        }
+        
+        // Check for correct number of octets
+        if (octetCount != 4) {
+            throw invalid_argument("IP address must have exactly 4 octets");
+        }
+    }
+
+    uint32_t toUint() const { return address; }
+    
+    string toString() const {
+        ostringstream oss;
+        oss << ((address >> 24) & 0xFF) << "."
+            << ((address >> 16) & 0xFF) << "."
+            << ((address >> 8) & 0xFF) << "."
+            << (address & 0xFF);
+        return oss.str();
+    }
+
+    IPv4Address operator&(const IPv4Address& other) const {
+        return IPv4Address(address & other.address);
+    }
+
+    IPv4Address operator|(const IPv4Address& other) const {
+        return IPv4Address(address | other.address);
+    }
+
+    IPv4Address operator+(int offset) const {
+        return IPv4Address(address + offset);
+    }
+
+    bool operator==(const IPv4Address& other) const {
+        return address == other.address;
+    }
+
+    bool operator<(const IPv4Address& other) const {
+        return address < other.address;
+    }
+};
+
+class NetworkCalculator {
+private:
+    IPv4Address ipAddress;
+    IPv4Address subnetMask;
+    int cidr;
+
+    // Calculate CIDR from subnet mask
+    void calculateCIDR() {
+        uint32_t mask = subnetMask.toUint();
+        cidr = 0;
+        for (int i = 0; i < 32; i++) {
+            if (mask & (1U << (31 - i))) {
+                cidr++;
+            } else {
+                break;
+            }
+        }
+        
+        // Check for valid mask format (must be sequence of ones then zeros)
+        uint32_t validMask = (0xFFFFFFFFU << (32 - cidr)) & 0xFFFFFFFFU;
+        if (mask != validMask) {
+            throw invalid_argument("Invalid subnet mask format");
+        }
+    }
+
+public:
+    NetworkCalculator(const string& input) {
+        // Remove leading and trailing spaces
+        string trimmedInput = input;
+        trimmedInput.erase(0, trimmedInput.find_first_not_of(" \t"));
+        trimmedInput.erase(trimmedInput.find_last_not_of(" \t") + 1);
+        
+        size_t slashPos = trimmedInput.find('/');
+        if (slashPos == string::npos) {
+            throw invalid_argument("Invalid input format. Use IP/MASK format (e.g., 192.168.1.1/24)");
+        }
+
+        string ipStr = trimmedInput.substr(0, slashPos);
+        string maskStr = trimmedInput.substr(slashPos + 1);
+
+        // Check for empty strings
+        if (ipStr.empty() || maskStr.empty()) {
+            throw invalid_argument("IP address and mask cannot be empty");
+        }
+
+        ipAddress = IPv4Address(ipStr);
+
+        if (maskStr.find('.') != string::npos) {
+            // Mask in 255.255.255.0 format
+            subnetMask = IPv4Address(maskStr);
+        } else {
+            // Mask in CIDR format (/24)
+            try {
+                // Check for non-digit characters in CIDR
+                for (char c : maskStr) {
+                    if (!isdigit(c)) {
+                        throw invalid_argument("Non-digit character in CIDR notation");
+                    }
+                }
+                
+                int cidrValue = stoi(maskStr);
+                if (cidrValue < 0 || cidrValue > 32) {
+                    throw invalid_argument("CIDR must be between 0 and 32");
+                }
+                uint32_t mask = (0xFFFFFFFFU << (32 - cidrValue)) & 0xFFFFFFFFU;
+                subnetMask = IPv4Address(mask);
+            } catch (const exception& e) {
+                throw invalid_argument("Invalid CIDR format: " + string(e.what()));
+            }
+        }
+
+        calculateCIDR();
+    }
+
+    IPv4Address getNetworkAddress() const {
+        return ipAddress & subnetMask;
+    }
+
+    IPv4Address getBroadcastAddress() const {
+        uint32_t wildcard = ~subnetMask.toUint();
+        return IPv4Address(getNetworkAddress().toUint() | wildcard);
+    }
+
+    uint32_t getTotalAddresses() const {
+        return (1ULL << (32 - cidr));
+    }
+
+    uint32_t getUsableHosts() const {
+        uint32_t total = getTotalAddresses();
+        return (total > 2) ? total - 2 : 0;
+    }
+
+    IPv4Address getFirstHost() const {
+        return getNetworkAddress() + 1;
+    }
+
+    IPv4Address getLastHost() const {
+        return getBroadcastAddress() + (-1);
+    }
+
+    string getSubnetMask() const {
+        return subnetMask.toString();
+    }
+
+    int getCIDR() const {
+        return cidr;
+    }
+
+    vector<NetworkCalculator> subnet(int numberOfSubnets) const {
+        if (numberOfSubnets <= 0) {
+            throw invalid_argument("Number of subnets must be positive");
+        }
+
+        if (numberOfSubnets == 1) {
+            return {*this}; // Return the network itself as one subnet
+        }
+
+        int bitsNeeded = ceil(log2(numberOfSubnets));
+        if (cidr + bitsNeeded > 32) {
+            throw invalid_argument("Too many subnets for current mask. Maximum: " + 
+                                 to_string(1 << (32 - cidr)));
+        }
+
+        vector<NetworkCalculator> subnets;
+        uint32_t subnetSize = 1ULL << (32 - cidr - bitsNeeded);
+        IPv4Address baseNetwork = getNetworkAddress();
+
+        for (int i = 0; i < numberOfSubnets; i++) {
+            IPv4Address subnetStart = baseNetwork + (i * subnetSize);
+            string subnetInput = subnetStart.toString() + "/" + to_string(cidr + bitsNeeded);
+            subnets.emplace_back(subnetInput);
+        }
+
+        return subnets;
+    }
+
+    void printInfo() const {
+        cout << "---" << endl;
+        cout << "| Network Address: " << getNetworkAddress().toString() << " |" << endl;
+        cout << "| Subnet Mask: " << getSubnetMask() << " |" << endl;
+        cout << "| Broadcast Address: " << getBroadcastAddress().toString() << " |" << endl;
+        cout << "| Total Addresses: " << getTotalAddresses() << " |" << endl;
+        cout << "| Network Range: " << getNetworkAddress().toString() << " - " 
+             << getBroadcastAddress().toString() << " |" << endl;
+        cout << "| Usable Hosts: " << getUsableHosts() << " |" << endl;
+        if (getUsableHosts() > 0) {
+            cout << "| Host Address Range: " << getFirstHost().toString() << " - " 
+                 << getLastHost().toString() << " |" << endl;
+        } else {
+            cout << "| Host Address Range: No available hosts |" << endl;
+        }
+        cout << "---" << endl;
+    }
+};
+
+class NetworkManager {
+private:
+    bool running;
+    
+    enum Command {
+        CMD_START,
+        CMD_SUBNET,
+        CMD_BACK,
+        CMD_EXIT,
+        CMD_CLEAR,
+        CMD_HELP,
+        CMD_UNKNOWN
+    };
+
+    map<string, Command> commandMap = {
+        {"/start", CMD_START},
+        {"/subnet", CMD_SUBNET},
+        {"/back", CMD_BACK},
+        {"/exit", CMD_EXIT},
+        {"/clear", CMD_CLEAR},
+        {"/help", CMD_HELP}
+    };
+
+    // Clear input buffer to prevent input issues
+    void clearInputBuffer() {
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    }
+
+    string toLower(const string& str) {
+        string result = str;
+        transform(result.begin(), result.end(), result.begin(), ::tolower);
+        return result;
+    }
+
+    void clearScreen() {
+        #ifdef _WIN32
+            system("cls");
+        #else
+            system("clear");
+        #endif
+    }
+
+    void printHelp() {
+        clearScreen();
+        cout << "=== Network Calculator ===" << endl;
+        cout << "Command list:" << endl;
+        cout << "/start  - calculate network parameters from IP and mask" << endl;
+        cout << "/subnet - subnetting a network into multiple subnets" << endl;
+        cout << "/back   - return to main menu" << endl;
+        cout << "/exit   - exit the program" << endl;
+        cout << "/clear  - clear the screen" << endl;
+        cout << "/help   - show this help" << endl;
+        cout << "==========================" << endl;
+    }
+
+    void handleStart() {
+        string input;
+        while (true) {
+            cout << "\nEnter IP address and mask (format: IP/MASK) or /back: ";
+            getline(cin, input);
+            
+            if (toLower(input) == "/back") {
+                clearScreen();
+                return;
+            }
+
+            try {
+                NetworkCalculator calculator(input);
+                calculator.printInfo();
+                
+                // Pause to view results
+                cout << "\nPress Enter to continue...";
+                cin.get();
+                clearScreen();
+                break;
+                
+            } catch (const exception& e) {
+                cout << " Error: " << e.what() << endl;
+                cout << "Example of correct format: 192.168.1.1/24 or 192.168.1.1/255.255.255.0" << endl;
+            }
+        }
+    }
+
+    void handleSubnet() {
+        string networkInput;
+        while (true) {
+            cout << "\nEnter network address and mask (format: IP/MASK) or /back: ";
+            getline(cin, networkInput);
+            
+            if (toLower(networkInput) == "/back") {
+                clearScreen();
+                return;
+            }
+
+            try {
+                NetworkCalculator calculator(networkInput);
+                
+                string subnetCountStr;
+                while (true) {
+                    cout << "Enter number of subnets: ";
+                    getline(cin, subnetCountStr);
+                    
+                    try {
+                        // Check for non-digit characters
+                        for (char c : subnetCountStr) {
+                            if (!isdigit(c)) {
+                                throw invalid_argument("Number must be numeric");
+                            }
+                        }
+                        
+                        int subnetCount = stoi(subnetCountStr);
+                        if (subnetCount <= 0) {
+                            throw invalid_argument("Number must be positive");
+                        }
+                        
+                        vector<NetworkCalculator> subnets = calculator.subnet(subnetCount);
+
+                        clearScreen();
+                        cout << "=== SUBNETTING RESULT ===" << endl;
+                        cout << "Original network: " << calculator.getNetworkAddress().toString() 
+                             << "/" << calculator.getCIDR() << endl;
+                        cout << "Number of subnets: " << subnetCount << endl;
+                        cout << "========================" << endl;
+                        
+                        for (size_t i = 0; i < subnets.size(); i++) {
+                            cout << "\nSubnet " << (i + 1) << ":" << endl;
+                            subnets[i].printInfo();
+                        }
+                        
+                        // Pause to view results
+                        cout << "\nPress Enter to continue...";
+                        cin.get();
+                        clearScreen();
+                        return;
+                        
+                    } catch (const exception& e) {
+                        cout << " Error: " << e.what() << endl;
+                    }
+                }
+                
+            } catch (const exception& e) {
+                cout << " Network input error: " << e.what() << endl;
+            }
+        }
+    }
+
+    Command parseCommand(const string& input) {
+        string lowerInput = toLower(input);
+        // Remove spaces around command
+        string trimmedInput = lowerInput;
+        trimmedInput.erase(0, trimmedInput.find_first_not_of(" \t"));
+        trimmedInput.erase(trimmedInput.find_last_not_of(" \t") + 1);
+        
+        auto it = commandMap.find(trimmedInput);
+        if (it != commandMap.end()) {
+            return it->second;
+        }
+        return CMD_UNKNOWN;
+    }
+
+public:
+    NetworkManager() : running(true) {}
+
+    void run() {
+        clearScreen();
+        printHelp();
+        
+        while (running) {
+            try {
+                cout << "Enter command: ";
+                string command;
+                getline(cin, command);
+
+                switch (parseCommand(command)) {
+                    case CMD_START:
+                        handleStart();
+                        printHelp(); // Show help after command execution
+                        break;
+                        
+                    case CMD_SUBNET:
+                        handleSubnet();
+                        printHelp();
+                        break;
+                        
+                    case CMD_BACK:
+                        clearScreen();
+                        cout << "Enter command:" << endl;
+                        break;
+                        
+                    case CMD_EXIT:
+                        running = false;
+                        clearScreen();
+                        cout << " Program terminated successfully..." << endl;
+                        break;
+                        
+                    case CMD_CLEAR:
+                        clearScreen();
+                        printHelp();
+                        break;
+                        
+                    case CMD_HELP:
+                        clearScreen();
+                        printHelp();
+                        break;
+                        
+                    case CMD_UNKNOWN:
+                        cout << " Unknown command. Enter /help for command list." << endl;
+                        break;
+                }
+            } catch (const exception& e) {
+                cout << " Unexpected error: " << e.what() << endl;
+                clearInputBuffer();
+            }
+        }
+    }
+};
+
+int main() {
+    try {
+        NetworkManager manager;
+        manager.run();
+    } catch (const exception& e) {
+        cout << " Critical error: " << e.what() << endl;
+        return 1;
+    }
+    return 0;
+}
