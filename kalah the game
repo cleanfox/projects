@@ -1,0 +1,235 @@
+#include <iostream>
+#include <vector>
+#include <iomanip>
+#include <thread>
+#include <chrono>
+using namespace std;
+
+//Система очистки рабочего экрана
+void clearScreen()  {
+    #ifdef _WIN32
+            system("cls");
+    #else
+            system("clear");
+    #endif
+    }
+
+class KalahGame {
+private:
+    int* player1;
+    int* player2;
+    int kalah1;
+    int kalah2;
+    int pitsPerPlayer;
+    int stonesPerPit;
+
+
+
+public:
+    KalahGame(int stones = 6) {
+        pitsPerPlayer = 6;
+        stonesPerPit = stones;
+        player1 = new int[pitsPerPlayer];
+        player2 = new int[pitsPerPlayer];
+        for (int i = 0; i < pitsPerPlayer; ++i) {
+            player1[i] = stones;
+            player2[i] = stones;
+        }
+        kalah1 = 0;
+        kalah2 = 0;
+    }
+
+    ~KalahGame() {
+        delete[] player1;
+        delete[] player2;
+    }
+    
+// игровое поле
+    void showBoard() const {
+        clearScreen();
+        cout << "\n            ";
+        for (int i = pitsPerPlayer - 1; i >= 0; --i) {
+            cout << "[" << i + 1 << "]";
+        }
+        cout << "\n         +----------------------+\n";
+        cout << "         | ";
+        for (int i = pitsPerPlayer - 1; i >= 0; --i) {
+            cout << setw(3) << player2[i];
+        }
+        cout << "   |\n";
+
+        cout << "Kalah2" << setw(2) << "[" <<  kalah2 << "]" << " ==================== " << "[" << kalah1 << "] " << "Kalah1\n";
+
+        cout << "         | ";
+        for (int i = 0; i < pitsPerPlayer; ++i) {
+            cout << setw(3) << player1[i];
+        }
+        cout << "   |\n";
+        cout << "         +----------------------+\n      " << "      ";
+        for (int i = 0; i < pitsPerPlayer; ++i) {
+            cout << "[" << i + 1 << "]";
+        }
+        cout << "\n" << "\n";
+    }
+
+    bool isGameOver() const {
+        int sum1 = 0, sum2 = 0;
+        for (int i = 0; i < pitsPerPlayer; ++i) {
+            sum1 += player1[i];
+            sum2 += player2[i];
+        }
+        return sum1 == 0 || sum2 == 0;
+    }
+
+    void collectRemainingStones() {
+        for (int i = 0; i < pitsPerPlayer; ++i) {
+            kalah1 += player1[i];
+            kalah2 += player2[i];
+            player1[i] = 0;
+            player2[i] = 0;
+        }
+    }
+//Развитие игры
+    
+    void play() {
+        int currentPlayer = 1;
+        int lastPlayer = 0;
+        int lastPit = 0;
+
+        while (!isGameOver()) {
+            showBoard();
+            if (lastPlayer != 0) {
+                cout << "Previous move: Player " << lastPlayer << " moved from pit " << lastPit << "\n" ;
+            }
+
+            cout << "Player " << currentPlayer << "'s turn. Choose a pit (1-6): ";
+            int pit;
+            cin >> pit;
+            if (pit < 1 || pit > 6) {
+                cout << "Invalid choice. Try again." ;
+                continue;
+            }
+
+            int* own = currentPlayer == 1 ? player1 : player2;
+            int* opp = currentPlayer == 1 ? player2 : player1;
+            int& ownKalah = currentPlayer == 1 ? kalah1 : kalah2;
+            int& oppKalah = currentPlayer == 1 ? kalah2 : kalah1;
+
+            int idx = pit - 1;
+            if (own[idx] == 0) {
+                cout << "Empty pit. Choose another.";
+                continue;
+            }
+
+            // Сохраняем данные о последнем ходе
+            lastPlayer = currentPlayer;
+            lastPit = pit;
+
+            int stones = own[idx];
+            own[idx] = 0;
+            int i = idx + 1;
+            bool ownSide = true;
+
+            while (stones > 0) {
+                while (i < pitsPerPlayer && stones > 0) {
+                    own[i]++;
+                    i++;
+                    stones--;
+                    if (stones == 0 && own[i - 1] == 1 && ownSide && opp[pitsPerPlayer - i] > 0) {
+                        ownKalah += own[i - 1] + opp[pitsPerPlayer - i];
+                        own[i - 1] = 0;
+                        opp[pitsPerPlayer - i] = 0;
+                        showBoard();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1300));
+                    }
+                }
+
+                if (stones > 0) {
+                    ownKalah++;
+                    stones--;
+                    if (stones == 0) {
+                        cout << "Last stone in your Kalah : extra turn!";
+                        std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+                        goto CONTINUE_TURN;
+                    }
+                }
+
+                i = 0;
+                swap(own, opp);
+                ownSide = !ownSide;
+            }
+            currentPlayer = 3 - currentPlayer;
+        CONTINUE_TURN:;
+        }
+
+        collectRemainingStones();
+        showBoard();
+        if (kalah1 > kalah2)
+            cout << "Player 1 wins!";
+        else if (kalah2 > kalah1)
+            cout << "Player 2 wins!";
+        else
+            cout << "It's a draw!";
+    }
+
+};
+//стартовое меню
+void* showMenu() {
+    cout << "===== Kalah Game =====\n";
+    cout << "1. Start Game\n";
+    cout << "2. Game Rules\n";
+    cout << "3. Exit\n";
+    cout << "Choose an option: ";
+    return nullptr;
+}
+// Блок правила
+void showRules() {
+    clearScreen();
+    cout << R"(
+--- Kalah Game Rules ---
+
+- Two players take turns.
+- The board consists of 2 rows of 6 pits and 2 Kalahs (one for each player).
+- Each of the 12 small pits initially contains 6 stones.
+- On a turn, a player selects a pit on their side, collects all stones,
+  and distributes them one-by-one in a counter-clockwise direction,
+  including their Kalah but skipping the opponent's Kalah.
+- If the last stone lands in the player's Kalah, they take another turn.
+- If the last stone lands in an empty pit on the player's side and the opposite
+  pit has stones, the player captures both and places them in their Kalah.
+- The game ends when one player's pits are all empty.
+  The other player collects all remaining stones into their Kalah.
+- The player with the most stones in their Kalah wins.
+)";
+}
+//консоль выбора 
+int main() {
+    int choice;
+    do {
+        showMenu();
+        cin >> choice;
+        switch (choice) {
+            case 1: {
+                int stones;
+                do {
+                    cout << "Enter number of stones per pit (3 to 6): ";
+                    cin >> stones;
+                    if (stones < 3 || stones > 6) {
+                        cout << "Invalid number. Please try again.\n";
+                    }
+                } while (stones < 3 || stones > 6);
+                KalahGame game(stones);
+                game.play();
+                break;
+            }
+            case 2:
+                showRules();
+                break;
+            case 3:
+                cout << "Exiting game. Goodbye!\n";
+                return 0;
+            default:
+                cout << "Invalid option. Try again.\n";
+        }
+    } while (true);
+}
