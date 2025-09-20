@@ -1,0 +1,241 @@
+import cv2
+import numpy as np
+import time
+from collections import deque
+import json
+import os
+
+class WarehouseRobot:
+    def __init__(self, warehouse_width=120, section_width=50, section_height=50):
+        self.warehouse_width = warehouse_width
+        self.section_width = section_width
+        self.section_height = section_height
+        self.robot_position = 0  # Текущая позиция робота
+        self.current_section = None  # Текущая секция для обработки
+        
+        # Создаем карту склада (120 секций)
+        self.warehouse_map = self.create_warehouse_map()
+        
+        # Очередь заданий
+        self.task_queue = deque()
+        
+        # Статусы секций: 0 - пустая, 1 - занята, 2 - обрабатывается
+        self.section_status = [0] * warehouse_width
+        
+        print(f"Инициализирован робот для склада на {warehouse_width} секций")
+
+    def create_warehouse_map(self):
+        """Создает визуальное представление склада"""
+        map_height = 600
+        map_width = self.warehouse_width * self.section_width + 100
+        
+        # Создаем изображение склада
+        warehouse_map = np.ones((map_height, map_width, 3), dtype=np.uint8) * 255
+        
+        # Рисуем секции
+        for i in range(self.warehouse_width):
+            x = i * self.section_width + 50
+            cv2.rectangle(warehouse_map, (x, 50), (x + self.section_width - 5, 550), 
+                         (200, 200, 200), 1)
+            cv2.putText(warehouse_map, str(i+1), (x + 10, 35), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        
+        return warehouse_map
+
+    def detect_sections(self, frame):
+        """Обнаружение секций на изображении с камеры"""
+        # Конвертируем в оттенки серого
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Применяем бинаризацию
+        _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        
+        # Находим контуры
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        detected_sections = []
+        
+        for contour in contours:
+            # Аппроксимируем контур
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            
+            # Если контур имеет 4 угла (прямоугольник)
+            if len(approx) == 4:
+                x, y, w, h = cv2.boundingRect(approx)
+                
+                # Проверяем размеры (примерно как секция)
+                if 40 <= w <= 60 and 40 <= h <= 60:
+                    detected_sections.append((x, y, w, h))
+        
+        return detected_sections
+
+    def add_task(self, section_number, action="store"):
+        """Добавление задачи в очередь"""
+        if 1 <= section_number <= self.warehouse_width:
+            task = {
+                'section': section_number,
+                'action': action,
+                'status': 'pending',
+                'timestamp': time.time()
+            }
+            self.task_queue.append(task)
+            print(f"Добавлена задача: {action} в секцию {section_number}")
+            return True
+        return False
+
+    def process_next_task(self):
+        """Обработка следующей задачи в очереди"""
+        if not self.task_queue:
+            return False
+        
+        task = self.task_queue.popleft()
+        self.current_section = task['section']
+        task['status'] = 'processing'
+        
+        print(f"Обрабатывается задача: {task['action']} в секции {task['section']}")
+        
+        # Симуляция движения к секции
+        self.move_to_section(task['section'])
+        
+        # Симуляция выполнения действия
+        self.perform_action(task['action'])
+        
+        task['status'] = 'completed'
+        task['completion_time'] = time.time()
+        
+        return True
+
+    def move_to_section(self, target_section):
+        """Перемещение робота к целевой секции"""
+        print(f"Движение от секции {self.robot_position} к секции {target_section}")
+        
+        # Симуляция движения
+        steps = abs(target_section - self.robot_position)
+        for step in range(steps):
+            time.sleep(0.1)  # Симуляция времени движения
+            if target_section > self.robot_position:
+                self.robot_position += 1
+            else:
+                self.robot_position -= 1
+        
+        print(f"Робот прибыл в секцию {target_section}")
+        self.robot_position = target_section
+
+    def perform_action(self, action):
+        """Выполнение действия (складирование/извлечение)"""
+        if action == "store":
+            print("Выполняется складирование груза...")
+            self.section_status[self.robot_position - 1] = 1  # Помечаем как занятую
+        elif action == "retrieve":
+            print("Выполняется извлечение груза...")
+            self.section_status[self.robot_position - 1] = 0  # Помечаем как пустую
+        
+        time.sleep(1)  # Симуляция времени выполнения действия
+
+    def update_visualization(self):
+        """Обновление визуального представления склада"""
+        visual_map = self.warehouse_map.copy()
+        
+        # Обновляем статусы секций
+        for i, status in enumerate(self.section_status):
+            x = i * self.section_width + 50
+            color = (100, 255, 100) if status == 0 else (100, 100, 255)  # Зеленый - свободно, Красный - занято
+            
+            if status == 2:  # Обрабатывается
+                color = (255, 255, 100)  # Желтый
+            
+            cv2.rectangle(visual_map, (x, 50), (x + self.section_width - 5, 550), color, -1)
+            cv2.rectangle(visual_map, (x, 50), (x + self.section_width - 5, 550), (0, 0, 0), 1)
+        
+        # Рисуем робота
+        if self.robot_position > 0:
+            robot_x = (self.robot_position - 1) * self.section_width + 50 + self.section_width // 2
+            cv2.circle(visual_map, (robot_x, 300), 15, (0, 0, 255), -1)
+        
+        # Отображаем информацию
+        cv2.putText(visual_map, f"Робот в секции: {self.robot_position}", (10, 580), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        cv2.putText(visual_map, f"Задач в очереди: {len(self.task_queue)}", (300, 580), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        
+        return visual_map
+
+    def save_state(self, filename="warehouse_state.json"):
+        """Сохранение состояния склада"""
+        state = {
+            'robot_position': self.robot_position,
+            'section_status': self.section_status,
+            'tasks': list(self.task_queue)
+        }
+        
+        with open(filename, 'w') as f:
+            json.dump(state, f)
+        
+        print(f"Состояние сохранено в {filename}")
+
+    def load_state(self, filename="warehouse_state.json"):
+        """Загрузка состояния склада"""
+        if os.path.exists(filename):
+            with open(filename, 'r') as f:
+                state = json.load(f)
+            
+            self.robot_position = state['robot_position']
+            self.section_status = state['section_status']
+            self.task_queue = deque(state['tasks'])
+            
+            print(f"Состояние загружено из {filename}")
+            return True
+        return False
+
+def main():
+    # Инициализация робота
+    robot = WarehouseRobot(warehouse_width=120)
+    
+    # Добавление тестовых задач
+    robot.add_task(15, "store")
+    robot.add_task(87, "store")
+    robot.add_task(45, "retrieve")
+    robot.add_task(112, "store")
+    
+    # Основной цикл
+    while True:
+        # Обновляем визуализацию
+        visual_map = robot.update_visualization()
+        
+        # Обрабатываем задачи
+        if not robot.process_next_task():
+            print("Очередь задач пуста. Ожидание новых заданий...")
+            time.sleep(2)
+            
+            # Добавляем случайные задачи для демонстрации
+            import random
+            if random.random() < 0.3:  # 30% chance to add new task
+                section = random.randint(1, 120)
+                action = "store" if random.random() < 0.7 else "retrieve"
+                robot.add_task(section, action)
+        
+        # Отображаем визуализацию
+        cv2.imshow('Warehouse Automation', visual_map)
+        
+        # Обработка клавиш
+        key = cv2.waitKey(100) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('s'):
+            robot.save_state()
+        elif key == ord('l'):
+            robot.load_state()
+        elif key == ord('a'):
+            # Ручное добавление задачи
+            try:
+                section = int(input("Введите номер секции (1-120): "))
+                action = input("Введите действие (store/retrieve): ")
+                robot.add_task(section, action)
+            except:
+                print("Ошибка ввода")
+    
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
